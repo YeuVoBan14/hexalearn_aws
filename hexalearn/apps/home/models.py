@@ -78,6 +78,7 @@ class UserProfile(models.Model):
     daily_ai_limit = models.PositiveIntegerField(default=20)
     reading_level = models.ForeignKey(
         Level, on_delete=models.SET_NULL, null=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
