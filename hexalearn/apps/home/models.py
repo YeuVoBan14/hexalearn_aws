@@ -72,7 +72,7 @@ class UserProfile(models.Model):
     address = models.CharField(max_length=255, blank=True, null=True)
     date_of_birth = models.DateField(null=True, blank=True)
     profile_picture = models.ImageField(
-        upload_to="profile_pics/", blank=True, null=True)
+        upload_to="hexalearn_profile_pics/", blank=True, null=True)
     native_language = models.CharField(
         max_length=10, blank=True, choices=LANGUAGE_CHOICES)
     daily_ai_limit = models.PositiveIntegerField(default=20)
