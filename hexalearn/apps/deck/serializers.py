@@ -32,6 +32,23 @@ class CardSerializer(serializers.ModelSerializer):
         fields = ['id', 'front_text', 'back_text', 'hint', 'front_image', 'back_image']
         read_only_fields = ['id']
 
+class DeckListSerializer(serializers.ModelSerializer):
+    source_name = serializers.CharField(source='source.name', read_only=True)
+    estimated_level_name = serializers.CharField(
+        source='estimated_level.name', read_only=True)
+    total_cards = serializers.IntegerField(
+        source='cards.count', read_only=True)
+
+    class Meta:
+        model = Deck
+        fields = [
+            'id', 'title', 'description',
+            'source', 'source_name',
+            'estimated_level', 'estimated_level_name',
+            'is_public', 'total_cards',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 class DeckDetailSerializer(serializers.ModelSerializer):
     cards = CardSerializer(many=True, read_only=True)

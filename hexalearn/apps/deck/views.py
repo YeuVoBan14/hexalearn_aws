@@ -19,6 +19,7 @@ from apps.home.models import Source
 from .serializers import (
     CardSerializer,
     DeckCreateSerializer,
+    DeckListSerializer,
     DeckDetailSerializer,
     DeckOverviewSerializer,
     DeckUpdateSerializer,
@@ -96,6 +97,8 @@ class DeckViewSet(viewsets.ModelViewSet):
     pagination_class = CustomPagination
 
     def get_serializer_class(self):
+        if self.action == 'list':
+            return DeckListSerializer
         if self.action == 'retrieve':
             return DeckDetailSerializer
         if self.action == 'create':
@@ -280,23 +283,23 @@ class CardViewSet(viewsets.ModelViewSet):
 def decks_in_progress(request):
     today = timezone.now().date()
 
-    decks = Deck.objects.filter(
-        cards__study_states__user=request.user,
-    ).distinct().annotate(
+    decks = Deck.objects.annotate(
         total_cards=Count('cards', distinct=True),
         studied_cards=Count(
-            'cards__study_states',
+            'cards',
             filter=Q(cards__study_states__user=request.user),
             distinct=True
         ),
         due_today=Count(
-            'cards__study_states',
+            'cards',
             filter=Q(
                 cards__study_states__user=request.user,
                 cards__study_states__next_review__lte=today
             ),
             distinct=True
         ),
+    ).filter(
+        studied_cards__gt=0
     )
 
     data = [
@@ -304,9 +307,9 @@ def decks_in_progress(request):
             "deck_id": deck.id,
             "deck_title": deck.title,
             "total_cards": deck.total_cards,
-            "studied": deck.studied,
+            "studied": deck.studied_cards,
             "due_today": deck.due_today,
-            "progress_percent": round(deck.studied / deck.total_cards * 100) if deck.total_cards > 0 else 0,
+            "progress_percent": round(deck.studied_cards / deck.total_cards * 100) if deck.total_cards > 0 else 0,
         }
         for deck in decks
     ]

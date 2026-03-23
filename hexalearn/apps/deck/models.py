@@ -28,6 +28,9 @@ class Deck(models.Model):
     def __str__(self):
         return self.title
     
+    class Meta:
+        ordering = ['-created_at']
+    
 class Card(models.Model):
     deck = models.ForeignKey(Deck, on_delete=models.CASCADE, related_name='cards')
     front_text = models.TextField()

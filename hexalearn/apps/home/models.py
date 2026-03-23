@@ -14,7 +14,7 @@ LANGUAGE_CHOICES = [
 
 class Level(models.Model):
     name = models.CharField(max_length=50)
-    code = models.CharField(max_length=20, unique=True)
+    code = models.CharField(max_length=50, unique=True)
     color = ColorField(default="#FFFFFF")
     difficulty_rank = models.PositiveSmallIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -26,6 +26,13 @@ class Level(models.Model):
     def __str__(self):
         return self.name
     
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = self._generate_code()
+        if Level.objects.exclude(pk=self.pk).filter(code=self.code).exists():
+            raise ValueError(f"Level with code '{self.code}' already exists.")
+        super().save(*args, **kwargs)
+        
     def _generate_code(self):
         # "N5 - Beginner" → "n5-beginner"
         code = self.name.lower()
@@ -44,6 +51,13 @@ class Source(models.Model):
     def __str__(self):
         return self.name
     
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = self._generate_code()
+        if Source.objects.exclude(pk=self.pk).filter(code=self.code).exists():
+            raise ValueError(f"Source with code '{self.code}' already exists.")
+        super().save(*args, **kwargs)
+        
     def _generate_code(self):
         code = self.name.lower()
         code = re.sub(r'[^\w\s-]', '', code)
