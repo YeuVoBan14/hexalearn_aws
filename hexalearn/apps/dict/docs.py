@@ -3,7 +3,7 @@ from drf_spectacular.utils import (
     OpenApiParameter, OpenApiResponse, OpenApiExample,
 )
 from drf_spectacular.types import OpenApiTypes
-
+from .serializers import SavedWordListWriteSerializer, SavedWordListSerializer, ReorderItemSerializer
 
 # ---------------------------------------------------------------------------
 # COMMON PARAMETERS
@@ -553,4 +553,384 @@ def kanji_example_schema():
             summary='Delete an example sentence',
             parameters=[KANJI_PK_PARAM],
         ),
+    )
+    
+def word_pin_schema():
+    return extend_schema(
+        summary="Pin a word",
+        tags=['Dictionary - Word'],
+        description="""
+Pin a word for the current authenticated user.
+
+Supported behaviors:
+
+1. Send no body:
+- Only pin the word
+- Do not create or add to any list
+
+2. Send `list_id`:
+- Pin the word if not already pinned
+- Add the pinned word into an existing list of the current user
+
+3. Send `list_name`:
+- Create a new list, then add the pinned word into that new list
+- If `list_name` is an empty string, a new list is still created
+- Empty list name will be auto-renamed by model logic, for example:
+  `New List`, `New List (1)`, `New List (2)`, ...
+
+Notes:
+- `list_id` and `list_name` are optional
+- If the word is already pinned, the existing pinned record will be reused
+- If the word is already in the target list, no duplicate list item will be created
+""",
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "list_id": {
+                        "type": "integer",
+                        "nullable": True,
+                        "description": "Existing list ID of current user"
+                    },
+                    "list_name": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "New list name. If empty string is sent, a new list is still created and its name will be auto-generated, e.g. 'New List'"
+                    }
+                },
+                "examples": {
+                    "pin_only": {
+                        "summary": "Only pin word",
+                        "description": "No body sent. Only create/reuse UserPinnedWord, do not add into any list.",
+                        "value": {}
+                    },
+                    "add_to_existing_list": {
+                        "summary": "Add to existing list",
+                        "description": "Use an existing list of the current user.",
+                        "value": {
+                            "list_id": 12
+                        }
+                    },
+                    "create_new_list": {
+                        "summary": "Create new list with provided name",
+                        "description": "Create a new list, then add pinned word into it.",
+                        "value": {
+                            "list_name": "My favorite words"
+                        }
+                    },
+                    "create_new_list_empty_name": {
+                        "summary": "Create new list with empty name",
+                        "description": "A new list is still created. Empty name will be auto-renamed by model logic, e.g. 'New List'.",
+                        "value": {
+                            "list_name": ""
+                        }
+                    }
+                }
+            }
+        },
+        responses={
+            200: OpenApiResponse(
+                description="Success. Resource already existed, so no new object was created.",
+                examples=[
+                    OpenApiExample(
+                        "Pin only - already pinned",
+                        value={
+                            "pinned_word_id": 5,
+                            "already_pinned": True
+                        },
+                        response_only=True,
+                        status_codes=["200"]
+                    ),
+                    OpenApiExample(
+                        "Already in existing list",
+                        value={
+                            "pinned_word_id": 5,
+                            "list_id": 12,
+                            "list_name": "My JLPT N3",
+                            "item_id": 33,
+                            "position": 4,
+                            "already_in_list": True
+                        },
+                        response_only=True,
+                        status_codes=["200"]
+                    )
+                ]
+            ),
+            201: OpenApiResponse(
+                description="Success. New pin and/or new list item was created.",
+                examples=[
+                    OpenApiExample(
+                        "Pin only - created",
+                        value={
+                            "pinned_word_id": 5,
+                            "already_pinned": False
+                        },
+                        response_only=True,
+                        status_codes=["201"]
+                    ),
+                    OpenApiExample(
+                        "Added to existing list",
+                        value={
+                            "pinned_word_id": 5,
+                            "list_id": 12,
+                            "list_name": "My JLPT N3",
+                            "item_id": 34,
+                            "position": 5,
+                            "already_in_list": False
+                        },
+                        response_only=True,
+                        status_codes=["201"]
+                    ),
+                    OpenApiExample(
+                        "Created new named list and added item",
+                        value={
+                            "pinned_word_id": 5,
+                            "list_id": 20,
+                            "list_name": "My favorite words",
+                            "item_id": 50,
+                            "position": 1,
+                            "already_in_list": False
+                        },
+                        response_only=True,
+                        status_codes=["201"]
+                    ),
+                    OpenApiExample(
+                        "Created new auto-named list from empty list_name",
+                        value={
+                            "pinned_word_id": 5,
+                            "list_id": 21,
+                            "list_name": "New List",
+                            "item_id": 51,
+                            "position": 1,
+                            "already_in_list": False
+                        },
+                        response_only=True,
+                        status_codes=["201"]
+                    )
+                ]
+            ),
+            400: OpenApiResponse(
+                description="Invalid request body"
+            ),
+            401: OpenApiResponse(
+                description="Authentication required"
+            ),
+            404: OpenApiResponse(
+                description="List not found or does not belong to current user",
+                examples=[
+                    OpenApiExample(
+                        "List not found",
+                        value={
+                            "detail": "List not found or not belong to you"
+                        },
+                        response_only=True,
+                        status_codes=["404"]
+                    )
+                ]
+            )
+        }
+    )
+    
+def word_my_pinned_schema():
+    return extend_schema(
+        summary="Get all pinned words of current user",
+        tags=['Dictionary - Word'],
+        description="""
+        Return all words that the current authenticated user has pinned.
+
+        - Require authentication
+        - Support pagination
+        """,
+                responses={
+                    200: OpenApiResponse(
+                        description="List of pinned words",
+                        examples=[
+                            OpenApiExample(
+                                "Success",
+                                value={
+                                    "count": 2,
+                                    "next": None,
+                                    "previous": None,
+                                    "results": [
+                                        {
+                                            "id": 1,
+                                            "lemma": "食べる",
+                                            "language_name": "Japanese",
+                                            "part_of_speech_name": "Verb",
+                                            "short_definition": "ăn"
+                                        },
+                                        {
+                                            "id": 2,
+                                            "lemma": "飲む",
+                                            "language_name": "Japanese",
+                                            "part_of_speech_name": "Verb",
+                                            "short_definition": "uống"
+                                        }
+                                    ]
+                                }
+                            )
+                        ]
+                    )
+                }
+            )
+    
+def saved_word_list_schema():
+    return extend_schema(
+        tags=["Dictionary - Word"],
+        summary="Manage saved word lists",
+        description=(
+            "CRUD operations for SavedWordList. "
+            "Users can only create, update, and delete their own lists. "
+            "Public lists from other users can be viewed via GET.\n\n"
+
+            "**POST** — Create a new list. "
+            "If `name` is not provided, it will be automatically set to "
+            "`New List`, `New List (1)`, ...\n\n"
+
+            "**PATCH** — Update basic fields: `name`, `description`, `is_public`."
+        ),
+        request=SavedWordListWriteSerializer,
+        responses={
+            200: SavedWordListSerializer,
+            201: SavedWordListSerializer,
+            400: OpenApiResponse(description="Invalid data."),
+            401: OpenApiResponse(
+                description="Not authenticated or invalid token.",
+                examples={"example": {"detail": "Authentication credentials were not provided."}}
+            ),
+            403: OpenApiResponse(
+                description="Permission denied.",
+                examples={"example": {"detail": "You do not have permission to perform this action."}}
+            ),
+            404: OpenApiResponse(
+                description="List not found.",
+                examples={"example": {"detail": "Not found."}}
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Create Request",
+                value={"name": "N5 words to review", "description": "Common forgotten N5 words", "is_public": False},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Create Request (auto name)",
+                summary="No name provided → auto-generated name",
+                value={"is_public": False},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Response",
+                value={
+                    "id": 1,
+                    "name": "N5 words to review",
+                    "description": "Common forgotten N5 words",
+                    "is_public": False,
+                    "word_count": 2,
+                    "items": [
+                        {"id": 1, "pinned_word": 3, "word_id": 42, "lemma": "食べる", "language": "Japanese", "position": 1},
+                        {"id": 2, "pinned_word": 5, "word_id": 18, "lemma": "飲む",   "language": "Japanese", "position": 2},
+                    ],
+                    "created_at": "2026-03-26T06:00:00Z",
+                },
+                response_only=True,
+            ),
+        ],
+    )
+def saved_word_list_reorder_schema():
+    return extend_schema(
+        tags=["Dictionary - Word"],
+        summary="Reorder items in a saved word list",
+        description=(
+            "Update the `position` of multiple items at once. "
+            "Only the owner of the list is allowed to reorder.\n\n"
+
+            "Send an array of `{id, position}` objects. "
+            "You do not need to include all items, only those whose positions should change."
+        ),
+        request=ReorderItemSerializer(many=True),
+        responses={
+            200: SavedWordListSerializer,
+            400: OpenApiResponse(
+                description="Item does not belong to this list.",
+                examples={"example": {"detail": "Items not found in this list: [5]"}}
+            ),
+            403: OpenApiResponse(
+                description="Not the owner of the list.",
+                examples={"example": {"detail": "You do not have permission to reorder this list."}}
+            ),
+            404: OpenApiResponse(
+                description="List not found.",
+                examples={"example": {"detail": "Not found."}}
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Reorder Request",
+                value=[
+                    {"id": 3, "position": 1},
+                    {"id": 1, "position": 2},
+                    {"id": 5, "position": 3},
+                ],
+                request_only=True,
+            ),
+        ],
+    )
+    
+def saved_word_list_remove_item_schema():
+    return extend_schema(
+        tags=["Dictionary - Word"],
+        summary="Remove an item from a saved word list",
+        description=(
+            "Remove a word from a saved word list.\n\n"
+            "- Only the owner of the list can remove items.\n"
+            "- This action only removes the `SavedWordListItem` from the list.\n"
+            "- The underlying `UserPinnedWord` record is not deleted."
+        ),
+        responses={
+            204: OpenApiResponse(description="Item removed successfully."),
+            403: OpenApiResponse(
+                description="You do not have permission to modify this list.",
+                examples={
+                    "example": {
+                        "detail": "You do not have permission to modify this list."
+                    }
+                }
+            ),
+            404: OpenApiResponse(
+                description="Item not found.",
+                examples={
+                    "example": {
+                        "detail": "Item not found."
+                    }
+                }
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Success Response",
+                summary="Item removed successfully",
+                value=None,
+                response_only=True,
+                status_codes=["204"],
+            ),
+            OpenApiExample(
+                "Forbidden Response",
+                summary="Current user is not the owner of the list",
+                value={
+                    "detail": "You do not have permission to modify this list."
+                },
+                response_only=True,
+                status_codes=["403"],
+            ),
+            OpenApiExample(
+                "Not Found Response",
+                summary="Item does not exist in this list",
+                value={
+                    "detail": "Item not found."
+                },
+                response_only=True,
+                status_codes=["404"],
+            ),
+        ],
     )

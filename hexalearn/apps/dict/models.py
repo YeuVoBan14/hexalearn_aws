@@ -2,6 +2,8 @@ from django.db import models
 from django.forms import ValidationError
 from apps.home.models import Language, Level, MediaFile
 from django.db.models import Max
+from django.contrib.auth.models import User
+
 # Create your models here.
 
 class PartOfSpeech(models.Model):
@@ -36,6 +38,9 @@ class Word(models.Model):
 
     class Meta:
         unique_together = ('lemma', 'language')
+        indexes = [
+            models.Index(fields=['lemma']),
+        ]   
     def __str__(self):
         return self.lemma
     
@@ -53,6 +58,9 @@ class WordMeaning(models.Model):
     #full_definition  = "1. ăn 2. kiếm sống 3. ăn mòn"
     class Meta:
         unique_together = ('word', 'language')
+        indexes = [
+            models.Index(fields=['short_definition']),
+        ]
         
     def __str__(self):
         return f'Meaning of {self.word.lemma} in {self.language.name if self.language else "unknown language"}'
@@ -74,6 +82,7 @@ class WordPronunciation(models.Model):
         unique_together = ('word', 'type')
         indexes = [
             models.Index(fields=['word', 'type']),
+            models.Index(fields=['pronunciation']),  
         ]
     #For a given word, there should be only one pronunciation of each type (e.g., one IPA, one furigana, etc.)
     #indexes on word and type for faster lookups when retrieving pronunciations for a word
@@ -166,3 +175,70 @@ class Example(models.Model):
     def clean(self):
         if not self.word and not self.kanji:
             raise ValidationError('Example must be associated with either a word or a kanji.')
+        
+class UserPinnedWord(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="pinned_words")
+    word = models.ForeignKey(Word, on_delete=models.CASCADE, related_name="pinned_by_users")
+    
+    class Meta:
+        unique_together = ('user', 'word')
+        
+    def __str__(self):
+        return f"{self.user.username} - {self.word.lemma}"
+    
+class SavedWordList(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="saved_word_lists")
+    name = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True, null=True)
+    is_public = models.BooleanField(default=False)
+    pinned_words = models.ManyToManyField(
+        UserPinnedWord,
+        through="SavedWordListItem",
+        related_name="lists"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        
+    def __str__(self):
+        return f"{self.user.username} / {self.name}"
+    
+    def save(self, *args, **kwargs):
+        if not self.name or not self.name.strip():
+            base  = "New List"
+            name  = base
+            count = 1
+            while SavedWordList.objects.filter(user=self.user, name=name).exclude(pk=self.pk).exists():
+                name = f"{base} ({count})"
+                count += 1
+            self.name = name
+        super().save(*args, **kwargs)
+    
+class SavedWordListItem(models.Model):
+    list = models.ForeignKey(SavedWordList, on_delete=models.CASCADE, related_name="items")
+    pinned_word = models.ForeignKey(UserPinnedWord, on_delete=models.CASCADE, related_name="list_items")
+    
+    position = models.PositiveIntegerField(default=0)
+    
+    class Meta:
+        unique_together = ('list', 'pinned_word')
+        ordering        = ['position']
+ 
+    def __str__(self):
+        return f'{self.list.name} — {self.pinned_word.word.lemma} (pos {self.position})'
+    
+    def clean(self):
+        if self.list.user_id != self.pinned_word.user_id:
+            raise ValidationError("Pinned word must belong to the same user as the list.")
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        
+        if not self.pk and self.position == 0:
+            last = SavedWordListItem.objects.filter(list=self.list).aggregate(
+                max_pos=models.Max('position')
+            )['max_pos']
+            self.position = (last or 0) + 1
+        super().save(*args, **kwargs)
+    

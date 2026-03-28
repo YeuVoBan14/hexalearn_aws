@@ -4,7 +4,7 @@ from .views import (
     PartOfSpeechViewSet, WordViewSet, KanjiViewSet,
     WordMeaningViewSet, WordPronunciationViewSet,
     WordImageViewSet, WordExampleViewSet, WordKanjiWordViewSet,
-    KanjiMeaningViewSet, KanjiExampleViewSet,
+    KanjiMeaningViewSet, KanjiExampleViewSet, SavedWordListViewSet
 )
 
 app_name = 'dict'
@@ -12,6 +12,7 @@ router = routers.DefaultRouter()
 router.register(r'part-of-speech', PartOfSpeechViewSet, basename='part-of-speech')
 router.register(r'words', WordViewSet, basename='word')
 router.register(r'kanjis', KanjiViewSet, basename='kanji')
+router.register(r'saved-word-lists', SavedWordListViewSet, basename='saved-word-list')
 
 words_router = routers.NestedDefaultRouter(router, r'words', lookup='word')
 words_router.register(r'meanings',       WordMeaningViewSet,       basename='word-meanings')
