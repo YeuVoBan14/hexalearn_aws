@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404, render
-from django.db.models import Q, F
+from django.db.models import Q, F, Prefetch
 from django.db import transaction
 
 from rest_framework import viewsets
@@ -8,12 +8,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
 
-from .serializers import (TopicSerializer, PassageWriteSerializer, PassageReadSerializer,
+from .serializers import (ReadingNoteReadSerializer, ReadingNoteWriteSerializer, TopicSerializer, PassageWriteSerializer, PassageReadSerializer,
                           ParagraphWriteSerializer, ParagraphReadSerializer,
-                          ParagraphTranslationReadSerializer, ParagraphTranslationWriteSerializer)
+                          ParagraphTranslationReadSerializer, ParagraphTranslationWriteSerializer, UserReadingProgressReadSerializer, UserReadingProgressWriteSerializer)
 from .serializers import _delete_media_file_if_exists
 
-from .models import Topic, Passage, Paragraph, ParagraphTranslation
+from .models import ReadingNote, Topic, Passage, Paragraph, ParagraphTranslation, UserReadingProgress
 from .docs import *
 
 from apps.home.pagination import CustomPagination
@@ -81,11 +81,17 @@ class PassageViewSet(viewsets.ModelViewSet):
             filters &= Q(topic__code=topic)
         if estimated_read_time:
             filters &= Q(estimated_read_time__lte=estimated_read_time)
-
+        progress_prefetch = Prefetch(
+            'user_reading_progresses',
+            queryset=UserReadingProgress.objects.filter(
+                user=self.request.user
+            ) if self.request.user.is_authenticated else UserReadingProgress.objects.none(),
+            to_attr='user_progresses',
+        )
         return (
             Passage.objects
             .select_related('language', 'level', 'topic', 'source')
-            .prefetch_related('paragraphs__translations__language')
+            .prefetch_related('paragraphs__translations__language', progress_prefetch)
             .filter(filters)
             .order_by('-created_at')
         )
@@ -256,7 +262,10 @@ class ParagraphViewSet(viewsets.ModelViewSet):
         return (
             Paragraph.objects
             .filter(passage=passage)
-            .prefetch_related('translations__language')
+            .prefetch_related(
+                'translations__language',
+                'vocabulary',
+            )
             .order_by('index')
         )
 
@@ -299,7 +308,7 @@ class ParagraphViewSet(viewsets.ModelViewSet):
             passage=passage,
             index__gt=deleted_index,
         ).update(index=F('index') - 1)
-        
+
         _delete_media_file_if_exists(old_image)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -398,3 +407,92 @@ class ParagraphViewSet(viewsets.ModelViewSet):
         translation.translation = f"No translation in {translation.language.name} yet"
         translation.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+@reading_note_schema
+class ReadingNoteViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    
+    def get_serializer_class(self):
+        if self.request.method in ['POST', 'PATCH']:
+            return ReadingNoteWriteSerializer
+        return ReadingNoteReadSerializer
+    
+    def get_paragraph(self):
+        return get_object_or_404(
+            Paragraph, 
+            pk=self.kwargs['paragraph_pk'],
+            passage_id=self.kwargs['passage_pk']
+        )
+        
+    def get_queryset(self):
+        return ReadingNote.objects.filter(
+            paragraph=self.get_paragraph(),
+            user=self.request.user,
+        ).order_by('created_at')
+        
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        # Truyền paragraph vào context để validate selected_text
+        if not getattr(self, 'swagger_fake_view', False):
+            ctx['paragraph'] = self.get_paragraph()
+        return ctx
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user, paragraph=self.get_paragraph())
+        
+    def get_object(self):
+        return get_object_or_404(
+            ReadingNote,
+            pk=self.kwargs['pk'],
+            paragraph=self.get_paragraph(),
+            user=self.request.user,
+        )
+@reading_progress_schema
+class UserReadingProgressViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+    def get_passage(self):
+        return get_object_or_404(Passage, pk=self.kwargs['passage_pk'])
+    
+    def get_queryset(self):
+        return UserReadingProgress.objects.filter(
+            user = self.request.user,
+            passage = self.get_passage(),
+        ).select_related('passage')
+        
+    def get_serializer_class(self):
+        if self.request.method in ['POST', 'PATCH']:
+            return UserReadingProgressWriteSerializer
+        return UserReadingProgressReadSerializer
+        
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['passage'] = self.get_passage()
+        return context
+    
+    def get_object(self):
+        passage = self.get_passage()
+        return get_object_or_404(
+            UserReadingProgress,
+            user=self.request.user,
+            passage=passage,
+        )
+        
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user, passage=self.get_passage(), status='started',)
+        
+    def partial_update(self, request, *args, **kwargs):
+        passage = self.get_passage()
+        progress, _ = UserReadingProgress.objects.get_or_create(
+            user = self.request.user,
+            passage = passage,
+            defaults={'status': 'started', 'percentage_read': 0, 'last_paragraph_index': 1},
+        )
+        serializer = self.get_serializer(progress, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(UserReadingProgressReadSerializer(progress).data)
+        
+    

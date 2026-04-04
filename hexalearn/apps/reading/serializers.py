@@ -1,4 +1,7 @@
+from django.utils import timezone
+
 from apps.account.storage import delete_media_file
+from apps.dict.models import Word
 
 from .models import Topic, Passage, Paragraph, ParagraphTranslation, ReadingNote, UserReadingProgress
 from rest_framework import serializers
@@ -19,6 +22,21 @@ class TopicSerializer(serializers.ModelSerializer):
 # ----------------------------------------------------------------------------
 # READ NESTED PASSAGE, PARAGRAPH AND TRANSLATIONS
 # ----------------------------------------------------------------------------
+
+class UserReadingProgressReadSerializer(serializers.ModelSerializer):
+    passage_title = serializers.CharField(source='passage.title', read_only=True)
+    class Meta:
+        model = UserReadingProgress
+        fields = ['id','passage_title', 'status', 'percentage_read', 
+                  'last_paragraph_index', 'last_read_at',
+                  'complete_at']
+        read_only_fields = fields
+
+class ReadingNoteReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReadingNote
+        fields = ['id', 'selected_text', 'note', 'created_at']
+
 class ParagraphTranslationReadSerializer(serializers.ModelSerializer):
     language_code = serializers.CharField(source='language.code', read_only=True)
     language_name = serializers.CharField(source='language.name', read_only=True)
@@ -30,24 +48,48 @@ class ParagraphTranslationReadSerializer(serializers.ModelSerializer):
 class ParagraphReadSerializer(serializers.ModelSerializer):
     translations = ParagraphTranslationReadSerializer(many=True, read_only=True)
     image_url    = serializers.SerializerMethodField()
- 
+    notes        = serializers.SerializerMethodField()
+    vocabulary = serializers.SerializerMethodField()
     class Meta:
         model  = Paragraph
         fields = [
             'id', 'index', 'content', 'note',
-            'image_url', 'translations',
+            'image_url', 'translations', 'notes',
+            'vocabulary',
             'created_at', 'updated_at',
         ]
     @extend_schema_field(OpenApiTypes.URI)
     def get_image_url(self, obj) -> str | None:
         return obj.image_url
     
+    @extend_schema_field(ReadingNoteReadSerializer(many=True))
+    def get_notes(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return []
+        qs = obj.user_notes.filter(user=request.user).order_by('created_at')
+        return ReadingNoteReadSerializer(qs, many=True).data
+    
+    @extend_schema_field({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "lemma": {"type": "string"},
+            },
+        },
+    })
+    def get_vocabulary(self, obj):
+        return list(obj.vocabulary.values('id', 'lemma'))
+ 
 class PassageReadSerializer(serializers.ModelSerializer):
     paragraphs    = ParagraphReadSerializer(many=True, read_only=True)
     language_name = serializers.CharField(source='language.name', read_only=True)
     level_name    = serializers.CharField(source='level.name',    read_only=True)
     topic_name    = serializers.CharField(source='topic.name',    read_only=True)
     image_url     = serializers.SerializerMethodField()
+    reading_progress = serializers.SerializerMethodField()
  
     class Meta:
         model  = Passage
@@ -57,6 +99,7 @@ class PassageReadSerializer(serializers.ModelSerializer):
             'level', 'level_name',
             'topic', 'topic_name',
             'source', 'estimated_read_time',
+            'reading_progress',
             'image_url', 'paragraphs',
             'created_at', 'updated_at',
         ]
@@ -64,6 +107,20 @@ class PassageReadSerializer(serializers.ModelSerializer):
     @extend_schema_field(OpenApiTypes.URI)
     def get_image_url(self, obj) -> str | None:
         return obj.image_url
+    
+    @extend_schema_field(UserReadingProgressReadSerializer(many=False))
+    def get_reading_progress(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        progresses = getattr(obj, 'user_progresses', None)
+        if progresses is not None:
+            progress = progresses[0] if progresses else None
+        else:
+            progress = obj.user_reading_progresses.filter(user=request.user).first()
+        if not progress:
+            return None
+        return UserReadingProgressReadSerializer(progress).data
    
 # ----------------------------------------------------------------------------
 # WRITE NESTED PASSAGE
@@ -267,7 +324,58 @@ class PassageWriteSerializer(serializers.ModelSerializer):
         return instance
             
         
-    
+# ----------------------------------------------------------------------------
+# READING NOTE FOR WRITING
+# ----------------------------------------------------------------------------  
+      
+class ReadingNoteWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReadingNote
+        fields = ['selected_text', 'note']
         
+    def validate_selected_text(self, value):
+        paragraph = self.context.get('paragraph')
+        if paragraph and value not in paragraph.content:
+            raise serializers.ValidationError(
+                "selected_text must be a substring of paragraph content."
+            )
+        return value
 
+# ----------------------------------------------------------------------------
+# USER READING PROGRESS FOR WRITING
+# ----------------------------------------------------------------------------  
+
+class UserReadingProgressWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = UserReadingProgress
+        fields = ['last_paragraph_index', 'status', 'complete_at']
+        extra_kwargs = {
+            'status'      : {'required': False},
+            'complete_at' : {'required': False},
+        }
+        
+    def validate_last_paragraph_index(self, value):
+        passage = self.context.get('passage')
+        if passage:
+            total = passage.paragraphs.count()
+            if value < 1 or value > total:
+                raise serializers.ValidationError(
+                    f"last_paragraph_index must be between 1 and {total}."
+                )
+        return value
     
+    def validate(self, attrs):
+        passage = self.context.get('passage')
+        index   = attrs.get('last_paragraph_index')
+
+        if passage and index is not None:
+            total = passage.paragraphs.count()
+            if index >= total:
+                attrs['status']      = 'finished'
+                attrs['complete_at'] = timezone.now()  
+            elif index >= 2:
+                attrs['status'] = 'in_progress'
+            else:
+                attrs['status'] = 'started'
+
+        return attrs

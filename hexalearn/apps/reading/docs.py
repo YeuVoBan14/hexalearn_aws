@@ -42,6 +42,18 @@ LANGUAGE_ID_PARAM = OpenApiParameter(
     location=OpenApiParameter.PATH,
     description='ID of Language.',
 )
+PROGRESS_PASSAGE_PK_PARAM = OpenApiParameter(
+    name='passage_pk',
+    type=OpenApiTypes.INT,
+    location=OpenApiParameter.PATH,
+    description='ID của Passage.',
+)
+PROGRESS_ID_PARAM = OpenApiParameter(
+    name='id',
+    type=OpenApiTypes.INT,
+    location=OpenApiParameter.PATH,
+    description='ID của UserReadingProgress.',
+)
 
 # ---------------------------------------------------------------------------
 # TOPIC
@@ -83,7 +95,8 @@ topic_schema = extend_schema_view(
         ],
     ),
     update=extend_schema(summary='Update Topic', tags=['Reading']),
-    partial_update=extend_schema(summary='Partial update Topic', tags=['Reading']),
+    partial_update=extend_schema(
+        summary='Partial update Topic', tags=['Reading']),
     destroy=extend_schema(summary='Delete Topic', tags=['Reading']),
 )
 
@@ -277,4 +290,180 @@ Does NOT delete record — only reset text to placeholder.
     """,
     parameters=[PASSAGE_PK_PARAM, PARAGRAPH_ID_PARAM, TRANSLATION_PK_PARAM],
     tags=['Reading'],
+)
+
+reading_note_schema = extend_schema_view(
+    list=extend_schema(
+        summary='List Notes of a Paragraph',
+        description='Only returns notes belonging to the current authenticated user for this paragraph.',
+        parameters=[
+            OpenApiParameter(
+                name='passage_pk',   type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='paragraph_pk', type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+        ],
+        tags=['Reading'],
+    ),
+    retrieve=extend_schema(
+        summary='Retrieve Note',
+        parameters=[
+            OpenApiParameter(
+                name='passage_pk',   type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='paragraph_pk', type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='id',           type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+        ],
+        tags=['Reading'],
+    ),
+    create=extend_schema(
+        summary='Create a new Note',
+        description='`selected_text` must be a substring of the paragraph `content`.',
+        parameters=[
+            OpenApiParameter(
+                name='passage_pk',   type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='paragraph_pk', type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+        ],
+        tags=['Reading'],
+        examples=[
+            OpenApiExample(
+                'Request',
+                value={
+                    'selected_text': '食べます',
+                    'note': 'This is the polite form of 食べる (to eat)',
+                },
+                request_only=True,
+            ),
+        ],
+    ),
+    partial_update=extend_schema(
+        summary='Update Note',
+        description='Only the owner can update this note.',
+        parameters=[
+            OpenApiParameter(
+                name='passage_pk',   type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='paragraph_pk', type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='id',           type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+        ],
+        tags=['Reading'],
+    ),
+    destroy=extend_schema(
+        summary='Delete Note',
+        description='Only the owner can delete this note.',
+        parameters=[
+            OpenApiParameter(
+                name='passage_pk',   type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='paragraph_pk', type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                name='id',           type=OpenApiTypes.INT, location=OpenApiParameter.PATH),
+        ],
+        tags=['Reading'],
+    ),
+)
+
+reading_progress_schema = extend_schema_view(
+    list=extend_schema(
+        summary='List Progress of a Passage',
+        description='Returns the reading progress of the current user for this passage. Usually only one record exists.',
+        parameters=[PROGRESS_PASSAGE_PK_PARAM],
+        tags=['Reading'],
+    ),
+    retrieve=extend_schema(
+        summary='Retrieve Progress',
+        parameters=[PROGRESS_PASSAGE_PK_PARAM, PROGRESS_ID_PARAM],
+        tags=['Reading'],
+    ),
+    create=extend_schema(
+        summary='Start Reading a Passage',
+        description="""
+Create a new progress record for the current user on this passage.
+
+- `status` is automatically set to `started`.
+- `last_paragraph_index` defaults to `1`.
+- No need to send `status` — it is calculated automatically from `last_paragraph_index`.
+
+Returns `400` if progress already exists — use `PATCH` to update instead.
+        """,
+        parameters=[PROGRESS_PASSAGE_PK_PARAM],
+        tags=['Reading'],
+        examples=[
+            OpenApiExample(
+                'Request',
+                value={'last_paragraph_index': 1},
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Response 201',
+                value={
+                    'id': 1,
+                    'status': 'started',
+                    'percentage_read': 20,
+                    'last_paragraph_index': 1,
+                    'last_read_at': '2026-04-04T10:00:00Z',
+                    'complete_at': None,
+                    'created_at': '2026-04-04T10:00:00Z',
+                },
+                response_only=True,
+                status_codes=['201'],
+            ),
+        ],
+    ),
+    partial_update=extend_schema(
+        summary='Update Progress',
+        description="""
+Update reading progress. **Auto-creates** a progress record if it does not exist.
+
+**Status is automatically determined based on `last_paragraph_index`:**
+
+| last_paragraph_index | status |
+|---|---|
+| 1 | `started` |
+| 2 → total - 1 | `in_progress` |
+| >= total | `finished` + sets `complete_at` |
+
+Client only needs to send `last_paragraph_index` — no need to send `status`.
+        """,
+        parameters=[PROGRESS_PASSAGE_PK_PARAM, PROGRESS_ID_PARAM],
+        tags=['Reading'],
+        examples=[
+            OpenApiExample(
+                'Request — reading paragraph 3',
+                value={'last_paragraph_index': 3},
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Response — in_progress',
+                value={
+                    'id': 1,
+                    'status': 'in_progress',
+                    'percentage_read': 60,
+                    'last_paragraph_index': 3,
+                    'last_read_at': '2026-04-04T10:30:00Z',
+                    'complete_at': None,
+                    'created_at': '2026-04-04T10:00:00Z',
+                },
+                response_only=True,
+                status_codes=['200'],
+            ),
+            OpenApiExample(
+                'Response — finished',
+                value={
+                    'id': 1,
+                    'status': 'finished',
+                    'percentage_read': 100,
+                    'last_paragraph_index': 5,
+                    'last_read_at': '2026-04-04T11:00:00Z',
+                    'complete_at': '2026-04-04T11:00:00Z',
+                    'created_at': '2026-04-04T10:00:00Z',
+                },
+                response_only=True,
+                status_codes=['200'],
+            ),
+        ],
+    ),
+    update=extend_schema(exclude=True),
 )

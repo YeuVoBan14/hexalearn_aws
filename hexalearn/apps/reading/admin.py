@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Passage, Paragraph, ParagraphTranslation, Topic
+from .models import Passage, Paragraph, ParagraphTranslation, ReadingNote, Topic, UserReadingProgress
 
 
 class TopicAdmin(admin.ModelAdmin):
@@ -20,8 +20,8 @@ class ParagraphTranslationInline(admin.TabularInline):
 class ParagraphInline(admin.StackedInline):
     model = Paragraph
     extra = 0
-    fields = ('index', 'content', 'note', 'image', 'paragraph_image_preview', 'translation_languages')
-    readonly_fields = ('translation_languages', 'paragraph_image_preview')
+    fields = ('id', 'index', 'content', 'note', 'image', 'paragraph_image_preview', 'translation_languages')
+    readonly_fields = ('id', 'translation_languages', 'paragraph_image_preview')
     show_change_link = True
 
     def translation_languages(self, obj):
@@ -119,8 +119,21 @@ class ParagraphTranslationAdmin(admin.ModelAdmin):
     search_fields = ('paragraph__passage__title', 'paragraph__content', 'language__name')
     list_per_page = 50
 
+class ReadingNoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'paragraph', 'created_at')
+    list_filter = ('user',)
+    search_fields = ('paragraph__content', 'user__username')
+    list_per_page = 50
+    
+class UserReadingProgressAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'passage', 'status', 'percentage_read', 'last_paragraph_index')
+    list_filter = ('status',)
+    search_fields = ('user__username', 'passage__title')
+    list_per_page = 50
 
 admin.site.register(Passage, PassageAdmin)
 admin.site.register(Paragraph, ParagraphAdmin)
 admin.site.register(ParagraphTranslation, ParagraphTranslationAdmin)
 admin.site.register(Topic, TopicAdmin)
+admin.site.register(ReadingNote, ReadingNoteAdmin)
+admin.site.register(UserReadingProgress, UserReadingProgressAdmin)
