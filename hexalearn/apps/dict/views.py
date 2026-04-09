@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.decorators import action
 from django.db.models import Q
+from django.http import StreamingHttpResponse
 from rest_framework import viewsets, status
 
 from .models import (Kanji, KanjiMeaning, PartOfSpeech, Word, WordMeaning, WordPronunciation, WordImage, KanjiWord, Example,
@@ -17,14 +18,17 @@ from .serializers import (KanjiSerializer, KanjiSuggestSerializer, KanjiWriteSer
                         ExampleWriteSerializer, ExampleSerializer,
                         KanjiWordWriteSerializer, KanjiWordInlineSerializer,
                         KanjiMeaningWriteSerializer, KanjiMeaningSerializer,
-                        PinWordSerializer, SavedWordListWriteSerializer, SavedWordListSerializer,)
+                        PinWordSerializer, SavedWordListWriteSerializer, SavedWordListSerializer,
+                        WordAIRequestSerializer, KanjiAIRequestSerializer)
 from .docs import *
 from apps.home.models import MediaFile
 from apps.account.storage import delete_media_file, delete_media_files_bulk
 
-from apps.deck.models import Deck, Card
-from apps.home.models import Source
-from apps.deck.serializers import DeckDetailSerializer
+from .ai_prompts import (build_word_analyze_prompt, build_word_relations_prompt,
+                        build_kanji_analyze_prompt, build_kanji_relations_prompt)
+
+from apps.reading.ai_client import stream_gemini_response
+import logging
 
 # Create your views here.
 @part_of_speech_schema()
@@ -212,6 +216,74 @@ class WordViewSet(viewsets.ModelViewSet):
 
         pinned_word.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'], url_path='ai',permission_classes=[IsAuthenticated],)
+    def ai(self, request, pk=None):
+        """
+        POST /dict/v1/words/{id}/ai/
+        Body:
+        {
+            "mode": "analyze" | "relations"
+        }
+        """
+        # -- Validate user ------------------------------------------------------------
+        try:
+            profile = request.user.profile
+        except Exception:
+            return Response(
+                {'detail': 'User profile not found.'},status=status.HTTP_400_BAD_REQUEST,)
+        if profile.daily_ai_limit <= 0:
+            return Response(
+                {
+                    'detail': 'Daily AI limit reached. Resets at midnight UTC.',
+                    'daily_ai_limit': 0,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            
+        # -- Validate serializer -----------------------------------------------------
+        
+        serializer = WordAIRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        mode = serializer.validated_data['mode']
+        
+        # -- Get the word ------------------------------------------------------------
+        word = (
+            Word.objects
+            .select_related('language', 'level', 'part_of_speech')
+            .prefetch_related('meanings__language', 'pronunciations')
+            .get(pk=pk)
+        )
+        
+        # -- Build prompt ------------------------------------------------------------
+        if mode == 'analyze':
+            user_prompt = build_word_analyze_prompt(word, request.user)
+        else:
+            user_prompt = build_word_relations_prompt(word, request.user)
+            
+        def generate():
+            try:
+                for chunk in stream_gemini_response(user_prompt):
+                    safe_chunk = chunk.replace('\n', '\\n')
+                    yield f"data: {safe_chunk}\n\n"
+                yield "data: [DONE]\n\n"
+            
+                profile.daily_ai_limit = max(0, profile.daily_ai_limit - 1)
+                profile.save(update_fields=['daily_ai_limit'])
+            except Exception as e:
+                
+                logging.getLogger(__name__).error("AI stream error: %s", e)
+                yield f"data: [ERROR] {str(e)}\n\n"
+                
+        response = StreamingHttpResponse(
+            generate(),
+            content_type='text/event-stream',
+        )
+        response['Cache-Control']     = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        response['X-AI-Limit-Remaining'] = str(profile.daily_ai_limit - 1)
+        return response
+        
 @word_meaning_schema()
 class WordMeaningViewSet(viewsets.ModelViewSet):
     """
@@ -435,6 +507,73 @@ class KanjiViewSet(viewsets.ModelViewSet):
 
         serializer = KanjiSuggestSerializer(kanjis, many=True, context={'request': request})
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='ai',permission_classes=[IsAuthenticated],)
+    def ai(self, request, pk=None):
+        """
+        POST /dict/v1/words/{id}/ai/
+        Body:
+        {
+            "mode": "analyze" | "relations"
+        }
+        """    
+        # -- Validate user ------------------------------------------------------------
+        try:
+            profile = request.user.profile
+        except Exception:
+            return Response(
+                {'detail': 'User profile not found.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if profile.daily_ai_limit <= 0:
+            return Response(
+                {
+                    'detail': 'Daily AI limit reached. Resets at midnight UTC.',
+                    'daily_ai_limit': 0,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            
+        serializer = KanjiAIRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        mode = serializer.validated_data['mode']
+        
+        kanji = (
+            Kanji.objects
+            .select_related('level')
+            .prefetch_related('meanings__language')
+            .get(pk=pk)
+        )
+        
+        if mode == 'analyze':
+            user_prompt = build_kanji_analyze_prompt(kanji, request.user)
+        else:  # relations
+            user_prompt = build_kanji_relations_prompt(kanji, request.user)
+            
+        def generate():
+            try:
+                for chunk in stream_gemini_response(user_prompt):
+                    safe_chunk = chunk.replace('\n', '\\n')
+                    yield f"data: {safe_chunk}\n\n"
+    
+                yield "data: [DONE]\n\n"
+    
+                profile.daily_ai_limit = max(0, profile.daily_ai_limit - 1)
+                profile.save(update_fields=['daily_ai_limit'])
+    
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("AI stream error: %s", e)
+                yield f"data: [ERROR] {str(e)}\n\n"
+    
+        response = StreamingHttpResponse(
+            generate(),
+            content_type='text/event-stream',
+        )
+        response['Cache-Control']     = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        response['X-AI-Limit-Remaining'] = str(profile.daily_ai_limit - 1)
+        return response
     
 @kanji_meaning_schema()
 class KanjiMeaningViewSet(viewsets.ModelViewSet):

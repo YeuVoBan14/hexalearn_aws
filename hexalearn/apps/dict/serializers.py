@@ -411,3 +411,22 @@ class PinWordSerializer(serializers.Serializer):
             pass
         # if doesn't have list_id or name, it's will automatically created list with the name "New List"
         return attrs
+    
+    
+class WordAIRequestSerializer(serializers.Serializer):
+    MODE_CHOICE = ['analyze', 'relations']
+    
+    mode = serializers.ChoiceField(
+        choices = MODE_CHOICE,
+        default = 'analyze',
+        help_text = "analyze | relations",
+    )
+    
+class KanjiAIRequestSerializer(serializers.Serializer):
+    MODE_CHOICE = ['analyze', 'relations']
+    
+    mode = serializers.ChoiceField(
+        choices = MODE_CHOICE,
+        default = 'analyze',
+        help_text = "analyze | relations",
+    )
