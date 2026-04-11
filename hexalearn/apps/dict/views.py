@@ -217,6 +217,7 @@ class WordViewSet(viewsets.ModelViewSet):
         pinned_word.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     
+    @word_ai_schema
     @action(detail=True, methods=['post'], url_path='ai',permission_classes=[IsAuthenticated],)
     def ai(self, request, pk=None):
         """
@@ -508,6 +509,7 @@ class KanjiViewSet(viewsets.ModelViewSet):
         serializer = KanjiSuggestSerializer(kanjis, many=True, context={'request': request})
         return Response(serializer.data)
     
+    @kanji_ai_schema
     @action(detail=True, methods=['post'], url_path='ai',permission_classes=[IsAuthenticated],)
     def ai(self, request, pk=None):
         """

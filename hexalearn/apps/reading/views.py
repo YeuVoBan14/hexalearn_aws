@@ -416,6 +416,7 @@ class ParagraphViewSet(viewsets.ModelViewSet):
         translation.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
     
+    @reading_ai_schema
     @action(detail=True, methods=['post'], url_path='ai', permission_classes=[IsAuthenticated],)
     def ai_explain(self, request, passage_pk=None, pk=None):
         """

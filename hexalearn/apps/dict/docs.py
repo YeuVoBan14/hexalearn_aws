@@ -50,6 +50,10 @@ def part_of_speech_schema():
             summary='Create a new part-of-speech entry',
             description='`code` must be unique within the same language. If language=null, the code must be globally unique.',
         ),
+        update=extend_schema(
+            tags=['Dictionary - Word'],
+            summary='Update a part-of-speech',
+        ),
         partial_update=extend_schema(
             tags=['Dictionary - Word'],
             summary='Update a part-of-speech entry',
@@ -787,6 +791,13 @@ def saved_word_list_schema():
             request=SavedWordListWriteSerializer,
             responses={201: SavedWordListSerializer},
         ),
+        update=extend_schema(
+            tags=['Dictionary - Word'],
+            summary='Update a saved word list',
+            parameters=[SAVED_WORD_LIST_ID_PARAM],
+            request=SavedWordListWriteSerializer,
+            responses={200: SavedWordListSerializer},
+        ),
         partial_update=extend_schema(
             tags=['Dictionary - Word'],
             summary='Update a saved word list',
@@ -984,3 +995,100 @@ Create a flashcard deck from a saved word list.
             ),
         },
     )
+    
+word_ai_schema = extend_schema(
+    summary     = 'AI Word Analysis',
+    description = """
+Stream AI analysis về 1 từ tiếng Nhật.
+ 
+## Modes
+ 
+| Mode | Nội dung |
+|------|----------|
+| `analyze` | Sắc thái từ, register (formal/casual), mẹo nhớ, phân biệt với từ gần nghĩa, lỗi thường gặp |
+| `relations` | Từ đồng nghĩa, trái nghĩa, collocations phổ biến, 3 câu ví dụ ở các level khác nhau |
+ 
+## Response
+ 
+Stream **SSE** — giống Reading AI.
+Header `X-AI-Limit-Remaining` trả về số lần còn lại trong ngày.
+    """,
+    tags        = ['AI'],
+    request     = {
+        'application/json': {
+            'type'      : 'object',
+            'required'  : ['mode'],
+            'properties': {
+                'mode': {
+                    'type'       : 'string',
+                    'enum'       : ['analyze', 'relations'],
+                    'description': 'analyze | relations',
+                },
+            },
+        }
+    },
+    responses   = {
+        200: OpenApiResponse(description = 'SSE stream — text/event-stream'),
+        429: OpenApiResponse(description = 'Daily AI limit reached'),
+    },
+    examples    = [
+        OpenApiExample(
+            'Analyze — phân tích sâu từ',
+            value        = {'mode': 'analyze'},
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Relations — đồng nghĩa, trái nghĩa, ví dụ',
+            value        = {'mode': 'relations'},
+            request_only = True,
+        ),
+    ],
+)
+
+kanji_ai_schema = extend_schema(
+    summary     = 'AI Kanji Analysis',
+    description = """
+Stream AI analysis về 1 kanji.
+ 
+## Modes
+ 
+| Mode | Nội dung |
+|------|----------|
+| `analyze` | Phân tích bộ thủ (radicals), etymology, mẹo nhớ bằng visual story, hướng dẫn onyomi/kunyomi, kanji hay nhầm lẫn |
+| `relations` | Kanji cùng bộ thủ (bảng), compound words (熟語) quan trọng, 3 câu ví dụ với các reading khác nhau |
+ 
+## Response
+ 
+Stream **SSE** — giống Reading AI.
+    """,
+    tags        = ['AI'],
+    request     = {
+        'application/json': {
+            'type'      : 'object',
+            'required'  : ['mode'],
+            'properties': {
+                'mode': {
+                    'type'       : 'string',
+                    'enum'       : ['analyze', 'relations'],
+                    'description': 'analyze | relations',
+                },
+            },
+        }
+    },
+    responses   = {
+        200: OpenApiResponse(description = 'SSE stream — text/event-stream'),
+        429: OpenApiResponse(description = 'Daily AI limit reached'),
+    },
+    examples    = [
+        OpenApiExample(
+            'Analyze — phân tích bộ thủ và etymology',
+            value        = {'mode': 'analyze'},
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Relations — kanji cùng bộ và compound words',
+            value        = {'mode': 'relations'},
+            request_only = True,
+        ),
+    ],
+)

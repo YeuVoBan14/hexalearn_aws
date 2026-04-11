@@ -122,3 +122,32 @@ class StudyStateSerializer(serializers.ModelSerializer):
             'id', 'repetition', 'interval_days',
             'last_reviewed', 'next_review', 'review_count',
         ]
+        
+class DeckGeneratorRequestSerializer(serializers.Serializer):
+    seed_word_id = serializers.IntegerField(
+        help_text="Id Word from Dictionary App"
+    )
+    target_count = serializers.IntegerField(
+        min_value = 5,
+        max_value = 50,
+        default = 20,
+        help_text = "The amount of cards wanted to create (5-50)",
+    )
+    folder_id = serializers.IntegerField(
+        required = False,
+        allow_null = True,
+        help_text = "ID of folder want to added to (optional)"
+    )
+    
+class CardEnhancerRequestSerializer(serializers.Serializer):
+    card_id = serializers.IntegerField(
+        help_text = "ID of card wanted to be enhance"
+    )
+    
+class DeckEnhancerRequestSerializer(serializers.Serializer):
+    card_ids = serializers.ListField(
+        child = serializers.IntegerField(),
+        required = False,
+        allow_null = True,
+        help_text = "List of cards wanted to be enhance, leave blank if want to enhance all"
+    )

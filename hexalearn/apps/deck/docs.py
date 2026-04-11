@@ -883,3 +883,192 @@ def study_stats_schema():
             )
         ]
     )
+    
+deck_ai_generate_schema = extend_schema(
+    summary     = 'AI Smart Deck Generator',
+    description = """
+Tạo 1 deck mới từ **1 từ seed** — AI tự tìm các từ cùng semantic field
+và generate toàn bộ cards với furigana, meaning, hint.
+ 
+## Flow
+ 
+```
+1. Chọn seed_word_id (Word từ Dictionary)
+2. AI tìm {target_count} từ cùng semantic field
+3. Tạo Deck + Cards tự động
+4. Trả về DeckDetail với toàn bộ cards
+```
+ 
+## Ví dụ
+ 
+Seed word: `食べる (ăn)` → AI tạo deck "Food & Eating":
+- 食べる(たべる) → ăn
+- 飲む(のむ) → uống  
+- 料理する(りょうりする) → nấu ăn
+- 味わう(あじわう) → thư味わう
+- ...
+ 
+## Lưu ý
+ 
+- Response **không streaming** — phải chờ AI xử lý xong (5-15 giây)
+- Tối đa 50 cards mỗi lần generate
+- Trừ 1 `daily_ai_limit`
+- `folder_id` optional — nếu không truyền thì deck không có folder
+    """,
+    tags        = ['AI'],
+    request     = {
+        'application/json': {
+            'type'      : 'object',
+            'required'  : ['seed_word_id'],
+            'properties': {
+                'seed_word_id': {
+                    'type'       : 'integer',
+                    'description': 'ID của Word trong Dictionary app làm từ khóa gốc',
+                },
+                'target_count': {
+                    'type'       : 'integer',
+                    'minimum'    : 5,
+                    'maximum'    : 50,
+                    'default'    : 20,
+                    'description': 'Số lượng cards muốn tạo',
+                },
+                'folder_id': {
+                    'type'       : 'integer',
+                    'nullable'   : True,
+                    'description': 'ID folder để gán deck vào (optional)',
+                },
+            },
+        }
+    },
+    responses   = {
+        201: OpenApiResponse(
+            description = 'Deck created successfully',
+            examples    = [
+                OpenApiExample(
+                    'Success',
+                    value = {
+                        'id'         : 10,
+                        'title'      : 'Food & Eating Vocabulary',
+                        'description': 'Essential vocabulary for food and eating in Japanese',
+                        'total_cards': 20,
+                        'cards'      : [
+                            {
+                                'id'        : 1,
+                                'front_text': '食べる(たべる)',
+                                'back_text' : 'ăn',
+                                'hint'      : 'động từ nhóm 2',
+                            },
+                        ],
+                    },
+                    response_only = True,
+                    status_codes  = ['201'],
+                ),
+            ],
+        ),
+        404: OpenApiResponse(description = 'seed_word_id không tồn tại'),
+        429: OpenApiResponse(description = 'Daily AI limit reached'),
+        502: OpenApiResponse(description = 'AI service error hoặc trả về JSON không hợp lệ'),
+    },
+    examples    = [
+        OpenApiExample(
+            'Generate deck từ 食べる',
+            value = {
+                'seed_word_id': 42,
+                'target_count': 20,
+                'folder_id'   : 1,
+            },
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Generate deck không có folder',
+            value = {
+                'seed_word_id': 42,
+                'target_count': 15,
+            },
+            request_only = True,
+        ),
+    ],
+)
+ 
+# ---------------------------------------------------------------------------
+# CARD CONTENT ENHANCER
+# ---------------------------------------------------------------------------
+ 
+deck_ai_enhance_schema = extend_schema(
+    summary     = 'AI Card Content Enhancer',
+    description = """
+Enhance toàn bộ (hoặc 1 số) cards trong deck.
+ 
+AI cải thiện:
+- Thêm **furigana** nếu thiếu: `食べる` → `食べる(たべる)`
+- Làm **meaning** chính xác và tự nhiên hơn trong native language
+- Cải thiện **hint** hữu ích hơn mà không spoil đáp án
+ 
+## Batch processing
+ 
+AI xử lý **tất cả cards trong 1 API call** — nhanh hơn gọi từng card.
+Tối đa 30 cards mỗi lần. Nếu deck có nhiều hơn 30 cards,
+dùng `card_ids` để chỉ định cards cần enhance.
+ 
+## Lưu ý
+ 
+- Response **không streaming** — phải chờ (10-30 giây tùy số lượng cards)
+- Trừ 1 `daily_ai_limit` cho toàn bộ batch
+- Cards được **update trực tiếp trong DB**
+- `card_ids` trống = enhance tất cả cards trong deck
+    """,
+    tags        = ['AI'],
+    request     = {
+        'application/json': {
+            'type'      : 'object',
+            'properties': {
+                'card_ids': {
+                    'type'       : 'array',
+                    'items'      : {'type': 'integer'},
+                    'nullable'   : True,
+                    'description': 'List card IDs cần enhance. Bỏ trống = enhance tất cả (tối đa 30)',
+                },
+            },
+        }
+    },
+    responses   = {
+        200: OpenApiResponse(
+            description = 'Cards enhanced successfully',
+            examples    = [
+                OpenApiExample(
+                    'Success',
+                    value = {
+                        'enhanced_count'    : 5,
+                        'daily_ai_remaining': 14,
+                        'cards'             : [
+                            {
+                                'id'        : 1,
+                                'front_text': '食べる(たべる)',
+                                'back_text' : 'ăn, tiêu thụ',
+                                'hint'      : 'động từ nhóm 2 — て form: 食べて',
+                            },
+                        ],
+                    },
+                    response_only = True,
+                    status_codes  = ['200'],
+                ),
+            ],
+        ),
+        400: OpenApiResponse(description = 'Không có cards hoặc vượt quá 30 cards'),
+        403: OpenApiResponse(description = 'Không phải owner của deck'),
+        429: OpenApiResponse(description = 'Daily AI limit reached'),
+        502: OpenApiResponse(description = 'AI service error'),
+    },
+    examples    = [
+        OpenApiExample(
+            'Enhance tất cả cards trong deck',
+            value        = {},
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Enhance 3 cards cụ thể',
+            value        = {'card_ids': [1, 2, 3]},
+            request_only = True,
+        ),
+    ],
+)

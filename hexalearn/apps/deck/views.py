@@ -19,6 +19,8 @@ from apps.home.models import Source
 from .serializers import (
     CardSerializer,
     DeckCreateSerializer,
+    DeckGeneratorRequestSerializer,
+    DeckEnhancerRequestSerializer,
     DeckListSerializer,
     DeckDetailSerializer,
     DeckOverviewSerializer,
@@ -26,20 +28,11 @@ from .serializers import (
     FolderSerializer,
     StudyStateSerializer
 )
-from .docs import (
-    card_schema,
-    card_sync_schema,
-    deck_copy_schema,
-    deck_schema,
-    decks_in_progress_schema,
-    folder_overview_schema,
-    folder_schema,
-    study_session_schema,
-    study_stats_schema,
-    submit_review_schema,
-)
+from .docs import *
+from apps.dict.models import Word as DictWord
 
-
+from .ai_prompts import build_deck_generator_prompt, build_deck_enhancer_prompt
+from .ai_client_deck import call_gemini_json
 # ─── FOLDER ─────────────────────────────────────────────────────────────────
 @extend_schema(tags=['Flashcard'])
 @folder_schema()
@@ -182,6 +175,265 @@ class DeckViewSet(viewsets.ModelViewSet):
         return Response(DeckDetailSerializer(new_deck, context={'request': request}).data,
                         status=status.HTTP_201_CREATED)
 
+    @deck_ai_generate_schema
+    @action(
+        detail=False, methods=['post'], url_path='ai/generate',
+        permission_classes=[IsAuthenticated],
+    )
+    def ai_generate(self, request):
+        """
+        POST /deck/v1/decks/ai/generate/
+    
+        Tạo 1 deck mới từ 1 từ seed — AI tìm các từ cùng semantic field.
+    
+        Body:
+        {
+            "seed_word_id": 42,
+            "target_count": 20,
+            "folder_id": 1        ← optional
+        }
+    
+        Response: DeckDetailSerializer (deck vừa tạo kèm toàn bộ cards)
+    
+        Flow:
+        1. Lấy seed word từ dict app
+        2. Build prompt → gọi Gemini → nhận JSON {deck_title, deck_description, cards[]}
+        3. Tạo Deck + bulk_create Cards
+        4. Trả về deck detail
+        """
+        try:
+            profile = request.user.profile
+        except Exception:
+            return Response(
+                {'detail': 'User profile not found.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    
+        if profile.daily_ai_limit <= 0:
+            return Response(
+                {
+                    'detail'        : 'Daily AI limit reached. Resets at midnight UTC.',
+                    'daily_ai_limit': 0,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            
+        serializer = DeckGeneratorRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        seed_word_id = serializer.validated_data['seed_word_id']
+        target_count = serializer.validated_data['target_count']
+        folder_id    = serializer.validated_data.get('folder_id')
+        
+        #Get seed word data from dict app
+        try:
+            seed_word = DictWord.objects.select_related(
+                'language'
+            ).prefetch_related(
+                'meanings__language'
+            ).get(pk=seed_word_id)
+        except DictWord.DoesNotExist:
+            return Response(
+                {'detail': f'Word #{seed_word_id} not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+            
+        #get meaning in order to build prompt
+        seed_meaning = ''
+        try:
+            native_lang = request.user.profile.native_language.name
+            meaning_obj = seed_word.meanings.filter(language__name=native_lang).first()
+            if not meaning_obj:
+                meaning_obj = seed_word.meanings.first()
+            if meaning_obj:
+                seed_meaning = meaning_obj.short_definition
+        except Exception:
+            pass
+        
+        #Build prompt and call Gemini
+        try:
+            user_prompt = build_deck_generator_prompt(
+                seed_word_data = {'lemma': seed_word.lemma, 'meaning':seed_meaning},
+                target_count = target_count,
+                user = request.user,
+            )
+            ai_data = call_gemini_json(user_prompt)
+            # ai_data = {
+            #   "deck_title": "...",
+            #   "deck_description": "...",
+            #   "cards": [{"front_text": ..., "back_text": ..., "hint": ...}]
+            # }
+        except ValueError as e:
+            return Response(
+                {'detail': f'AI returned invalid response: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as e:
+            return Response(
+                {'detail': f'AI service error: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+            
+        #Validate folder (optinal)
+        
+        folder = None
+        if folder_id:
+            folder = get_object_or_404(Folder, pk=folder_id, owner=request.user)
+            
+        #Create deck and cards
+        source = Source.objects.filter(code__iexact='ai').first()
+        
+        deck = Deck.objects.create(
+            owner = request.user,
+            title       = ai_data.get('deck_title', f'{seed_word.lemma} — AI Generated'),
+            description = ai_data.get('description', ''),
+            source = source,
+            folder = folder,
+            is_public = False,
+        )
+        
+        cards_data = ai_data.get('cards', [])
+        Card.objects.bulk_create([
+            Card(
+                deck = deck,
+                front_text = c.get('front_text', ''),
+                back_text  = c.get('back_text', ''),
+                hint       = c.get('hint', '') or None,
+            )
+            for c in cards_data
+            if c.get('front_text') and c.get('back_text') #skip empty card
+        ])
+        
+        profile.daily_ai_limit = max(0, profile.daily_ai_limit - 1)
+        profile.save(update_fields=['daily_ai_limit'])
+    
+        return Response(
+            DeckDetailSerializer(deck, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+            headers={'X-AI-Limit-Remaining': str(profile.daily_ai_limit)},
+        )
+        
+    @deck_ai_enhance_schema
+    @action(
+        detail=True, methods=['post'], url_path='ai/enhance',
+        permission_classes=[IsAuthenticated]
+    )
+    def ai_enhance(self, request, pk=None):
+        """
+        POST /deck/v1/decks/{id}/ai/enhance/
+    
+        Enhance toàn bộ (hoặc 1 số) cards trong deck.
+        AI cải thiện furigana, meaning, hint cho từng card.
+    
+        Body:
+        {
+            "card_ids": [1, 2, 3]   ← optional, bỏ trống = enhance tất cả
+        }
+    
+        Response:
+        {
+            "enhanced_count": 5,
+            "cards": [...]          ← danh sách cards đã được update
+        }
+    
+        Flow:
+        1. Lấy cards cần enhance
+        2. Build batch prompt → gọi Gemini 1 lần → nhận JSON array
+        3. Bulk update cards trong DB
+        4. Trả về kết quả
+        """
+        
+        try:
+            profile = request.user.profile
+        except Exception:
+            return Response(
+                {'detail': 'User profile not found'},
+                status = status.HTTP_400_BAD_REQUEST
+            )
+            
+        if profile.daily_ai_limit <= 0:
+            return Response(
+                {
+                    'detail': 'Daily AI limit reached.',
+                    'daily_ai_limit': 0,
+                },
+                status = status.HTTP_429_TOO_MANY_REQUESTS
+            )
+            
+        #Get deck and verify onwership
+        deck = get_object_or_404(Deck, pk=pk)
+        if deck.owner != request.user:
+            return Response(
+                {'detail': 'You dont have permmission to edit this deck'},
+                status = status.HTTP_403_FORBIDDEN,
+            )
+            
+        #Validate request + get cards
+        serializer = DeckEnhancerRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        card_ids = serializer.validated_data.get('card_ids')
+        
+        cards_qs = Card.objects.filter(deck=deck)
+        if card_ids:
+            card_qs = cards_qs.filter(pk__in=card_ids)
+            
+        cards = list(cards_qs)
+        if not cards:
+            return Response(
+                {'detail': 'No card to enhance'},
+                status = status.HTTP_400_BAD_REQUEST,
+            )
+            
+        if len(cards) > 30:
+            return Response(
+                {'detail': 'Maximum 30 cards per enhance request. Use card_ids to specify.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
+        #build prompt and call gemini
+        try:
+            cards_data  = [
+                {'id': c.pk, 'front_text': c.front_text, 'back_text': c.back_text, 'hint': c.hint or ''}
+                for c in cards
+            ]
+            user_prompt = build_deck_enhancer_prompt(cards_data, request.user)
+            ai_results=  call_gemini_json(user_prompt)
+            # ai_results = [{"id": 1, "front_text": ..., "back_text": ..., "hint": ...}, ...]
+        except ValueError as e:
+            return Response(
+                {'detail': f'AI returned invalid response: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as e:
+            return Response(
+                {'detail': f'AI service error: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+            
+        #Bulk update 
+        enhanced_map = {item['id']: item for item in ai_results if 'id' in item}
+        updated_cards = []
+    
+        for card in cards:
+            enhanced = enhanced_map.get(card.pk)
+            if not enhanced:
+                continue
+            card.front_text = enhanced.get('front_text', card.front_text)
+            card.back_text  = enhanced.get('back_text',  card.back_text)
+            card.hint       = enhanced.get('hint', card.hint) or None
+            updated_cards.append(card)
+    
+        if updated_cards:
+            Card.objects.bulk_update(updated_cards, ['front_text', 'back_text', 'hint'])
+            
+        profile.daily_ai_limit = max(0, profile.daily_ai_limit - 1)
+        profile.save(update_fields=['daily_ai_limit'])
+    
+        return Response({
+            'enhanced_count'    : len(updated_cards),
+            'daily_ai_remaining': profile.daily_ai_limit,
+            'cards'             : CardSerializer(updated_cards, many=True).data,
+        }, headers={'X-AI-Limit-Remaining': str(profile.daily_ai_limit)})
 # ─── CARD ────────────────────────────────────────────────────────────────────
 
 

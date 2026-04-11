@@ -467,3 +467,113 @@ Client only needs to send `last_paragraph_index` — no need to send `status`.
     ),
     update=extend_schema(exclude=True),
 )
+
+reading_ai_schema = extend_schema(
+    summary     = 'AI Explain / Summarize / Vocabulary',
+    description = """
+Stream AI response về client theo chuẩn **SSE (Server-Sent Events)**.
+ 
+## Modes
+ 
+| Mode | Mô tả | `selected_text` |
+|------|-------|-----------------|
+| `explain` | Giải thích ngữ pháp + từ vựng đoạn được bôi đen | **Bắt buộc** |
+| `summarize` | Tóm tắt ý chính của paragraph | Không cần |
+| `vocabulary` | Liệt kê toàn bộ từ vựng khó với bảng JLPT | Optional |
+ 
+## Streaming Response
+ 
+Response là **text/event-stream** (SSE). Mỗi chunk có format:
+```
+data: <text_chunk>\\n\\n
+data: [DONE]\\n\\n
+```
+ 
+Client đọc bằng `fetch + ReadableStream`, không dùng `EventSource`
+vì đây là POST request.
+ 
+## Daily Limit
+ 
+Mỗi request trừ 1 `daily_ai_limit` từ UserProfile.
+Remaining được trả về trong header `X-AI-Limit-Remaining`.
+Limit reset về 20 mỗi ngày lúc midnight UTC.
+ 
+## Ví dụ nhận response phía client (JavaScript)
+ 
+```javascript
+const res = await fetch('/api/reading/v1/passages/1/paragraphs/1/ai/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ...' },
+    body: JSON.stringify({ mode: 'explain', selected_text: '食べます' }),
+})
+const reader = res.body.getReader()
+const decoder = new TextDecoder()
+while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const text = decoder.decode(value)
+    // parse SSE chunks
+}
+```
+    """,
+    parameters  = [PASSAGE_PK_PARAM, PARAGRAPH_ID_PARAM],
+    tags        = ['AI'],
+    request     = {
+        'application/json': {
+            'type'      : 'object',
+            'required'  : ['mode'],
+            'properties': {
+                'mode': {
+                    'type'       : 'string',
+                    'enum'       : ['explain', 'summarize', 'vocabulary'],
+                    'description': 'explain | summarize | vocabulary',
+                },
+                'selected_text': {
+                    'type'       : 'string',
+                    'nullable'   : True,
+                    'description': 'Đoạn text user bôi đen. Bắt buộc với explain mode.',
+                },
+            },
+        }
+    },
+    responses   = {
+        200: OpenApiResponse(
+            description = 'SSE stream — text/event-stream',
+            examples    = [
+                OpenApiExample(
+                    'Stream chunks',
+                    value = 'data: ## Giải thích\\ndata: 食べます là...\\ndata: [DONE]',
+                ),
+            ],
+        ),
+        400: OpenApiResponse(description = 'selected_text không hợp lệ hoặc thiếu'),
+        429: OpenApiResponse(
+            description = 'Daily AI limit reached',
+            examples    = [
+                OpenApiExample(
+                    '429',
+                    value = {'detail': 'Daily AI limit reached.', 'daily_ai_limit': 0},
+                    response_only = True,
+                    status_codes  = ['429'],
+                ),
+            ],
+        ),
+    },
+    examples    = [
+        OpenApiExample(
+            'Explain — giải thích đoạn bôi đen',
+            value        = {'mode': 'explain', 'selected_text': '食べます'},
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Summarize — tóm tắt paragraph',
+            value        = {'mode': 'summarize'},
+            request_only = True,
+        ),
+        OpenApiExample(
+            'Vocabulary — liệt kê từ vựng',
+            value        = {'mode': 'vocabulary', 'selected_text': '学校で日本語を勉強します。'},
+            request_only = True,
+        ),
+    ],
+)
