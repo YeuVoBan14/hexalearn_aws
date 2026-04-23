@@ -23,8 +23,7 @@ from .docs import *
 
 from apps.home.pagination import CustomPagination
 from apps.home.models import Language
-from .tasks import detect_vocabulary_for_paragraph_task, detect_vocabulary_for_passage_task
-
+from .tasks import async_detect_passage
 import logging
 from .ai_prompts import build_explain_prompt, build_summarize_prompt, build_vocabulary_prompt
 # Create your views here.
@@ -153,10 +152,8 @@ class PassageViewSet(viewsets.ModelViewSet):
         passage = self.get_object()
         replace = request.data.get('replace', False)
 
-        from .tasks import detect_vocabulary_for_passage_task
         transaction.on_commit(
-            lambda: detect_vocabulary_for_passage_task.delay(
-                passage.pk, replace=replace)
+            lambda: async_detect_passage(passage.pk, replace=replace)
         )
         return Response(
             {'detail': f'Vocabulary detection started for passage #{passage.pk}.'},

@@ -1,3 +1,9 @@
+# ============================================================
+# HexaLearn — AWS Free Tier build
+# Đã bỏ: celery, redis, amqp, kombu, billiard, vine,
+#         django_celery_results (thay bằng threading)
+# ============================================================
+
 annotated-types==0.7.0
 anyio==4.13.0
 asgiref==3.11.1
@@ -53,6 +59,7 @@ tenacity==9.1.4
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2025.3
+tzlocal==5.3.1
 unidic-lite==1.0.8
 uritemplate==4.2.0
 urllib3==2.6.3

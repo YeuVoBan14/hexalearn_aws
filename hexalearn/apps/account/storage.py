@@ -12,7 +12,6 @@ Usage:
 """
 
 import logging
-import boto3
 import cloudinary.uploader
 
 from django.conf import settings
@@ -20,46 +19,13 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
-def _get_storage_backend() -> str:
-    """Trả về 'cloudinary' hoặc 's3' dựa vào settings."""
-    backend = settings.STORAGES.get('default', {}).get('BACKEND', '')
-    if 'cloudinary' in backend:
-        return 'cloudinary'
-    return 's3'
-
-
 def delete_from_cloud(file_path: str) -> None:
-    """
-    Xóa file trên Cloudinary hoặc S3 theo file_path (public_id / S3 key).
-    Không raise exception nếu xóa thất bại — chỉ log warning.
-    """
-    backend = _get_storage_backend()
-
-    if backend == 'cloudinary':
-        try:
-            result = cloudinary.uploader.destroy(file_path)
-            if result.get('result') != 'ok':
-                logger.warning(
-                    "Cloudinary delete returned non-ok result for '%s': %s",
-                    file_path, result
-                )
-        except Exception as e:
-            logger.warning("Failed to delete '%s' from Cloudinary: %s", file_path, e)
-
-    else:  # s3
-        try:
-            s3 = boto3.client(
-                's3',
-                aws_access_key_id     = settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key = settings.AWS_SECRET_ACCESS_KEY,
-                region_name           = settings.AWS_S3_REGION_NAME,
-            )
-            s3.delete_object(
-                Bucket = settings.AWS_STORAGE_BUCKET_NAME,
-                Key    = file_path,
-            )
-        except Exception as e:
-            logger.warning("Failed to delete '%s' from S3: %s", file_path, e)
+    try:
+        result = cloudinary.uploader.destroy(file_path)
+        if result.get('result') != 'ok':
+            logger.warning("Cloudinary delete non-ok for '%s': %s", file_path, result)
+    except Exception as e:
+        logger.warning("Failed to delete '%s' from Cloudinary: %s", file_path, e)
 
 
 def delete_media_file(media_file, db: bool = True) -> None:

@@ -10,6 +10,3 @@ media/
 .vscode/
 .idea/
 .git/
-
-celerybeat-schedule
-celerybeat.pid

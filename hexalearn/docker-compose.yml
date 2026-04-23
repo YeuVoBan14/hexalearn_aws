@@ -1,10 +1,8 @@
 services:
   hexalearn:
     build: .
-    container_name: hexalearn_container
+    container_name: hexalearn_aws
     user: root
-    depends_on:
-      - redis
     restart: always
     volumes:
       - static_volume:/app/staticfiles
@@ -12,32 +10,17 @@ services:
       - .env
     command: ["/app/entrypoint.prod.sh"]
 
-  celery-worker:
-    build: .
-    container_name: celery-worker
-    restart: always
-    env_file:
-      - .env
-    command: celery -A hexalearn.celery_app worker --loglevel=info --pool=solo
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: always
-    ports:
-      - "6379:6379"
-
   frontend_proxy:
-    image: nginx:latest
+    image: nginx:alpine
+    container_name: hexalearn_aws_nginx
     ports:
       - "8001:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - static_volume:/static:ro # Nginx đọc từ đây
+      - static_volume:/static:ro
     depends_on:
-      - hexalearn
+      - hexalearn_aws
+    restart: always
 
 volumes:
   static_volume:

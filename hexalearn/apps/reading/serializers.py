@@ -11,8 +11,7 @@ from drf_spectacular.utils import extend_schema_field, OpenApiTypes
 
 from apps.home.models import Language, MediaFile
 
-from .tasks import detect_vocabulary_for_paragraph_task, detect_vocabulary_for_passage_task
-
+from .tasks import async_detect_paragraph, async_detect_passage
 class TopicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic
@@ -207,7 +206,7 @@ class ParagraphWriteSerializer(serializers.ModelSerializer):
             )
 
         transaction.on_commit(
-            lambda: detect_vocabulary_for_paragraph_task.delay(paragraph.pk)
+            lambda: async_detect_paragraph(paragraph.pk)
         )
         return paragraph
 
@@ -235,7 +234,7 @@ class ParagraphWriteSerializer(serializers.ModelSerializer):
  
         if content_changed:
             transaction.on_commit(
-                lambda: detect_vocabulary_for_paragraph_task.delay(instance.pk, replace=True)
+                lambda: async_detect_paragraph(instance.pk, replace=True)
             )
         return instance
     
@@ -301,7 +300,7 @@ class PassageWriteSerializer(serializers.ModelSerializer):
  
         if paragraphs_data:
             transaction.on_commit(
-                lambda: detect_vocabulary_for_passage_task.delay(passage.pk)
+                lambda: async_detect_passage(passage.pk)
             )
  
         return passage

@@ -45,7 +45,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'cloudinary_storage',
     'cloudinary',
-
     # local apps
     "apps.home",
     "apps.deck",
@@ -171,11 +170,6 @@ LOGGING = {
     },
     'loggers': {
         'apps': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'celery': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
