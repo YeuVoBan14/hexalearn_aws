@@ -14,7 +14,7 @@ services:
     image: nginx:alpine          # alpine nhẹ hơn nginx:latest ~50MB
     container_name: hexalearn_aws_nginx
     ports:
-      - "8001:80"
+      - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - static_volume:/static:ro
