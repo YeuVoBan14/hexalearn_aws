@@ -1,5 +1,5 @@
 services:
-  hexalearn:
+  hexalearn_aws:
     build: .
     container_name: hexalearn_aws
     user: root
@@ -9,9 +9,9 @@ services:
     env_file:
       - .env
     command: ["/app/entrypoint.prod.sh"]
-
+ 
   frontend_proxy:
-    image: nginx:alpine
+    image: nginx:alpine          # alpine nhẹ hơn nginx:latest ~50MB
     container_name: hexalearn_aws_nginx
     ports:
       - "8001:80"
@@ -21,6 +21,6 @@ services:
     depends_on:
       - hexalearn_aws
     restart: always
-
+ 
 volumes:
   static_volume:
